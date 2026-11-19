@@ -7,6 +7,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
 source slurm/env.sh
+# /tmp on the login node is small: unpack wheels inside the repo and keep no wheel cache
+export TMPDIR=$ROOT/.tmp PIP_NO_CACHE_DIR=1
+mkdir -p "$TMPDIR"
+trap 'rm -rf "$TMPDIR"' EXIT
 
 # --- create venv (no conda). Needs Python >= 3.9.
 if [ ! -f "$VENV/bin/activate" ]; then
@@ -50,6 +54,7 @@ if [ ! -f models/cifar10/resnet110/noise_0.25/checkpoint.pth.tar ]; then
   gdown "$GID" -O models.tar || { echo "gdown failed: download models.tar manually into $ROOT"; exit 1; }
   tar -xf models.tar   # -> models/cifar10/resnet110/noise_{0.12,0.25,0.50,1.00}/checkpoint.pth.tar
 fi
+[ -f models/cifar10/resnet110/noise_0.25/checkpoint.pth.tar ] && rm -f models.tar   # free 889 MB
 
 # 4) CIFAR-10 + ViT weights into local caches
 mkdir -p data out logs
