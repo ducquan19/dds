@@ -1,7 +1,7 @@
 #!/bin/bash
 # Summarise results (runs on login node, CPU only):  bash slurm/report.sh 0.25 [0.50 1.00]
 cd "$(dirname "$0")/.."
-eval "$(conda shell.bash hook)"; conda activate "${CONDA_ENV:-dds}"
+source slurm/env.sh; activate_env
 REF_DIR=${REF_DIR:-../Dual-Randomized-Smoothing/reproduce/data/carlini}
 for S in "$@"; do
   SIG=$(printf "%.2f" "$S")

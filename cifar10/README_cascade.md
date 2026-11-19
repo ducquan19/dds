@@ -93,7 +93,10 @@ bash slurm/submit_all.sh 0.25          # orig, dds, cheap, probe(+calibrate), ca
 squeue -u $USER
 bash slurm/report.sh 0.25              # bảng certified acc / sec/img / exp_frac
 ```
-Biến môi trường tùy chỉnh: `N`, `SKIP`, `BATCH` (giảm nếu OOM), `DELTA`, `SWEEP="0.5 0.7 0.9 0.99"`, `CONDA_ENV`.
+Không dùng conda: `setup.sh` tạo venv tại `.venv/` (đổi bằng `VENV=...`) từ `python3` (≥ 3.9). Nếu cụm dùng
+environment modules thì đặt `MODULES="python/3.10 cuda/12.1"`. Nếu python hệ thống quá cũ, cài `uv` vào
+`$HOME` (không cần root) và script sẽ tự dùng nó để tải Python 3.10.
+Biến môi trường tùy chỉnh: `N`, `SKIP`, `BATCH` (giảm nếu OOM), `DELTA`, `SWEEP="0.5 0.7 0.9 0.99"`, `VENV`, `MODULES`, `CUDA_WHEEL`.
 Kết quả: `out/{orig,dds,cheap}_<σ>.tsv`, `out/cascade_<σ>_tau{cal,0.9,...}.tsv`, `out/tau_<σ>.txt`.
 
 ## 5. Sau CIFAR-10 σ=0.25

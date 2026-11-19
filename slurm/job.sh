@@ -19,8 +19,8 @@ N=${N:-10000}; SKIP=${SKIP:-20}; BATCH=${BATCH:-500}; ALPHA=${ALPHA:-0.0005}
 DELTA=${DELTA:-0.01}; CAL_ALPHA=${CAL_ALPHA:-0.05}; NCAL=${NCAL:-9500}
 
 cd "${SLURM_SUBMIT_DIR:-$(dirname "$0")/..}"
-eval "$(conda shell.bash hook)"
-conda activate "${CONDA_ENV:-dds}"
+source slurm/env.sh
+activate_env
 export PYTHONPATH=cifar10 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1
 SIG=$(printf "%.2f" "$SIGMA")
 CKPT=models/cifar10/resnet110/noise_${SIG}/checkpoint.pth.tar

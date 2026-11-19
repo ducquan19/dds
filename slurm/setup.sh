@@ -4,17 +4,30 @@
 # Compute nodes are often offline, so everything (checkpoints, CIFAR-10, ViT weights)
 # is downloaded/cached here first; job.sh then runs with HF_HUB_OFFLINE=1.
 set -euo pipefail
-ENV=${CONDA_ENV:-dds}
 cd "$(dirname "$0")/.."
 ROOT=$(pwd)
+source slurm/env.sh
 
-eval "$(conda shell.bash hook)"
-if ! conda env list | grep -qE "^$ENV\s"; then
-  conda create -n "$ENV" python=3.10 -y
+# --- create venv (no conda). Needs Python >= 3.9.
+if [ ! -f "$VENV/bin/activate" ]; then
+  PY=${PYTHON:-python3}
+  if command -v "$PY" >/dev/null 2>&1 && "$PY" -c 'import sys; sys.exit(sys.version_info < (3, 9))'; then
+    "$PY" -m venv "$VENV"
+  elif command -v uv >/dev/null 2>&1 || [ -x "$HOME/.local/bin/uv" ]; then
+    # system python too old/missing: uv downloads a standalone Python 3.10 into $HOME (no root needed)
+    UV=$(command -v uv || echo "$HOME/.local/bin/uv")
+    "$UV" venv --python 3.10 --seed "$VENV"
+  else
+    echo "Need Python >= 3.9. Options:"
+    echo "  - module avail python   then   MODULES=python/3.10 bash slurm/setup.sh"
+    echo "  - install uv (no root): curl -LsSf https://astral.sh/uv/install.sh | sh   then rerun"
+    exit 1
+  fi
 fi
-conda activate "$ENV"
-# Pick the CUDA wheel that matches the cluster driver (cu121 works on most A100/H100 nodes).
-pip install torch torchvision --index-url https://download.pytorch.org/whl/cu121
+activate_env
+python -m pip install --upgrade pip
+# Pick the CUDA wheel matching the node driver (check `nvidia-smi` on a GPU node; cu121 needs driver >= 530).
+pip install torch torchvision --index-url https://download.pytorch.org/whl/${CUDA_WHEEL:-cu121}
 pip install timm transformers statsmodels scipy numpy gdown
 
 # 1) iDDPM 50M CIFAR-10 diffusion checkpoint
