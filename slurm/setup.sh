@@ -26,8 +26,9 @@ if [ ! -f "$VENV/bin/activate" ]; then
 fi
 activate_env
 python -m pip install --upgrade pip
-# Pick the CUDA wheel matching the node driver (check `nvidia-smi` on a GPU node; cu121 needs driver >= 530).
-pip install torch torchvision --index-url https://download.pytorch.org/whl/${CUDA_WHEEL:-cu121}
+# transformers refuses torch.load(.bin) with torch < 2.6 (CVE-2025-32434) -> need torch >= 2.6,
+# which is not on the cu121 index. cu124 wheels run on any CUDA-12 driver (>= 525) via minor-version compat.
+pip install "torch>=2.6,<2.8" torchvision --index-url https://download.pytorch.org/whl/${CUDA_WHEEL:-cu124}
 # transformers 5.x needs torch>=2.6 (not on the cu121 index) -> stay on 4.x
 pip install "transformers>=4.40,<5" timm statsmodels scipy "numpy<2.3" gdown
 python -c "import torch, transformers; print('torch', torch.__version__, '| transformers', transformers.__version__)"
