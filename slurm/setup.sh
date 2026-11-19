@@ -28,7 +28,9 @@ activate_env
 python -m pip install --upgrade pip
 # Pick the CUDA wheel matching the node driver (check `nvidia-smi` on a GPU node; cu121 needs driver >= 530).
 pip install torch torchvision --index-url https://download.pytorch.org/whl/${CUDA_WHEEL:-cu121}
-pip install timm transformers statsmodels scipy numpy gdown
+# transformers 5.x needs torch>=2.6 (not on the cu121 index) -> stay on 4.x
+pip install "transformers>=4.40,<5" timm statsmodels scipy "numpy<2.3" gdown
+python -c "import torch, transformers; print('torch', torch.__version__, '| transformers', transformers.__version__)"
 
 # 1) iDDPM 50M CIFAR-10 diffusion checkpoint
 [ -f cifar10/cifar10_uncond_50M_500K.pt ] || wget -O cifar10/cifar10_uncond_50M_500K.pt \
