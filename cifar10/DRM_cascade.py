@@ -78,11 +78,21 @@ def _load(path):
 
 
 def load_cohen_resnet110(ckpt_path: str) -> nn.Module:
-    """Load a checkpoint from locuslab/smoothing (Sequential(normalize, resnet110))."""
-    model = nn.Sequential(NormalizeLayer(_CIFAR10_MEAN, _CIFAR10_STD),
-                          resnet_cifar(depth=110, num_classes=10))
+    """Load a noise-trained CIFAR ResNet in Cohen's format: Sequential(normalize, resnet).
+
+    Also accepts checkpoints from repos built on Cohen's code (SmoothAdv, Consistency, MACER, ...):
+    strips 'module.' prefixes, accepts keys with or without the leading '1.' and infers the
+    depth from ckpt['arch'] (cifar_resnet20 / cifar_resnet110)."""
     ckpt = _load(ckpt_path)
-    state = ckpt.get("state_dict", ckpt)
+    state = ckpt.get("state_dict", ckpt.get("net", ckpt))
+    arch = ckpt.get("arch", "cifar_resnet110") if isinstance(ckpt, dict) else "cifar_resnet110"
+    depth = 20 if "20" in str(arch) else 110
+    state = {k.replace("module.", ""): v for k, v in state.items()}
+    if not any(k.startswith("1.") for k in state):
+        state = {"1." + k: v for k, v in state.items()}
+    state = {k: v for k, v in state.items() if not k.startswith("0.")}   # normalize layer has no params
+    model = nn.Sequential(NormalizeLayer(_CIFAR10_MEAN, _CIFAR10_STD),
+                          resnet_cifar(depth=depth, num_classes=10))
     model.load_state_dict(state)
     return model
 
@@ -117,6 +127,9 @@ class CascadeRobustModel(nn.Module):
         if mode != "dds":
             assert cheap_ckpt is not None, "--cheap_ckpt is required for cheap/cascade"
             self.cheap = load_cohen_resnet110(cheap_ckpt).eval().cuda()
+            if amp:
+                self.cheap = self.cheap.to(memory_format=torch.channels_last)
+        torch.backends.cudnn.benchmark = True
 
         self.reset_stats()
 
@@ -128,7 +141,38 @@ class CascadeRobustModel(nn.Module):
     # ---------- paths ----------
     @torch.no_grad()
     def cheap_logits(self, x_noisy):
-        return self.cheap(x_noisy)
+        # amp also covers the cheap path: its confidences change slightly -> re-run probe/calibrate
+        with torch.autocast("cuda", dtype=torch.float16, enabled=self.amp):
+            if self.amp:
+                x_noisy = x_noisy.contiguous(memory_format=torch.channels_last)
+            return self.cheap(x_noisy).float()
+
+    @torch.no_grad()
+    def profile(self, batch=500, reps=5):
+        """Seconds per 10k samples for: cheap path, diffusion UNet only, ViT only (incl. resize)."""
+        import time
+        x = torch.rand(batch, 3, 32, 32, device="cuda")
+        a = float(self.diffusion.sqrt_alphas_cumprod[self.t])
+        tb = torch.full((batch,), self.t, device="cuda", dtype=torch.long)
+
+        def unet():
+            return self.diffusion.p_sample(self.model, a * (2 * x - 1), tb, clip_denoised=True)["pred_xstart"]
+
+        def vit():
+            return self.classifier(F.interpolate(x * 2 - 1, (224, 224), mode="bicubic", antialias=True)).logits
+
+        parts = {"cheap": lambda: self.cheap_logits(x)} if hasattr(self, "cheap") else {}
+        if hasattr(self, "model"):
+            parts.update(unet=unet, vit=vit)
+        res = {}
+        for name, fn in parts.items():
+            with torch.autocast("cuda", dtype=torch.float16, enabled=self.amp):
+                fn(); torch.cuda.synchronize(); t0 = time.time()
+                for _ in range(reps):
+                    fn()
+                torch.cuda.synchronize()
+            res[name] = (time.time() - t0) / reps * 10000 / batch
+        return res
 
     @torch.no_grad()
     def expensive_logits(self, x_noisy):
