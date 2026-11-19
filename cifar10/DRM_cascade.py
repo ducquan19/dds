@@ -98,10 +98,13 @@ def sigma_to_timestep(diffusion, sigma: float) -> int:
 
 class CascadeRobustModel(nn.Module):
     def __init__(self, sigma: float, mode: str = "cascade", tau: float = 0.9,
-                 cheap_ckpt: str = None, multistep: bool = False):
+                 cheap_ckpt: str = None, multistep: bool = False, amp: bool = False):
         super().__init__()
         assert mode in ("dds", "cheap", "cascade")
         self.sigma, self.mode, self.tau, self.multistep = sigma, mode, tau, multistep
+        # amp: fp16 autocast for the expensive path (T4 tensor cores). Still a fixed deterministic
+        # function of x+eps, so the certificate is unaffected; use the SAME flag for dds and cascade.
+        self.amp = amp
 
         model, diffusion = create_model_and_diffusion(
             **args_to_dict(Args(), model_and_diffusion_defaults().keys()))
@@ -129,7 +132,11 @@ class CascadeRobustModel(nn.Module):
 
     @torch.no_grad()
     def expensive_logits(self, x_noisy):
-        a = float(self.diffusion.sqrt_alphas_cumprod[self.t])   # numpy float64 -> python float
+        with torch.autocast("cuda", dtype=torch.float16, enabled=self.amp):
+            return self._expensive_logits(x_noisy).float()
+
+    def _expensive_logits(self, x_noisy):
+        a =float(self.diffusion.sqrt_alphas_cumprod[self.t])   # numpy float64 -> python float
         x_t = a * (2 * x_noisy - 1)                      # x_t = sqrt(abar) * (x_in + delta)
         t_batch = torch.full((len(x_t),), self.t, device=x_t.device, dtype=torch.long)
         if self.multistep:

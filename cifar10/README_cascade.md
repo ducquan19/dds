@@ -99,6 +99,13 @@ environment modules thì đặt `MODULES="python/3.10 cuda/12.1"`. Nếu python 
 Biến môi trường tùy chỉnh: `N`, `SKIP`, `BATCH` (giảm nếu OOM), `DELTA`, `SWEEP="0.5 0.7 0.9 0.99"`, `VENV`, `MODULES`, `CUDA_WHEEL`.
 Kết quả: `out/{orig,dds,cheap}_<σ>.tsv`, `out/cascade_<σ>_tau{cal,0.9,...}.tsv`, `out/tau_<σ>.txt`.
 
+## Chạy trên Kaggle
+
+Import `kaggle/cascade_kaggle.ipynb` (GPU T4 x2, Internet On). Notebook clone repo, tải checkpoint, kiểm tra AMP,
+rồi chạy probe → calibrate → certify `cascade`/`cheap`/`dds` song song trên 2 GPU (`--shard/--num_shards`).
+Mọi lần certify đều `--resume`: tăng `MAX_IMAGES` 100 → 500 thì chỉ chạy phần ảnh còn thiếu.
+`compare.py` nhận glob để gộp shard (`dds=out/dds_0.25_s*.tsv`) và `--intersect` để so trên cùng tập ảnh.
+
 ## 5. Sau CIFAR-10 σ=0.25
 - Lặp lại với σ = 0.5, 1.0 (đổi `$CKPT` sang noise_0.50 / noise_1.00).
 - Ablation: `--multistep` cho đường đắt; đổi đường rẻ (ResNet-20/56, model ℓ2-robust từ RobustBench).

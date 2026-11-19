@@ -22,7 +22,7 @@ from DRM_cascade import CascadeRobustModel
 
 def main(a):
     torch.manual_seed(a.seed)
-    model = CascadeRobustModel(a.sigma, mode="cascade", tau=1.01, cheap_ckpt=a.cheap_ckpt)
+    model = CascadeRobustModel(a.sigma, mode="cascade", tau=1.01, cheap_ckpt=a.cheap_ckpt, amp=a.amp)
     if a.split == "train":
         # NOTE: both the Cohen ResNet and the ViT were trained on these images -> optimistic risk.
         ds = datasets.CIFAR10(a.data_dir, train=True, download=False, transform=transforms.ToTensor())
@@ -89,5 +89,6 @@ if __name__ == "__main__":
     p.add_argument("--batch_size", type=int, default=500)
     p.add_argument("--data_dir", type=str, default="data/cifar10")
     p.add_argument("--seed", type=int, default=0)
+    p.add_argument("--amp", action="store_true", help="fp16 autocast on the expensive path")
     p.add_argument("--out", type=str, required=True)
     main(p.parse_args())
