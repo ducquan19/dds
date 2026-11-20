@@ -14,7 +14,7 @@ import glob
 import os
 
 import numpy as np
-from scipy.stats import norm
+from scipy.stats import binomtest, norm
 from statsmodels.stats.proportion import proportion_confint
 
 RADII = [0.0, 0.25, 0.5, 0.75, 1.0]
@@ -32,8 +32,11 @@ def main(a):
     assert files, f"no records in {a.rec}"
     a.sigma = float(np.load(files[0])["sigma"]) if a.sigma is None else a.sigma
     taus = list(a.taus)
+    cal_tau = None
     if a.tau_file:
-        taus.append(float(open(a.tau_file).read()))
+        cal_tau = float(open(a.tau_file).read())
+        if cal_tau not in taus:
+            taus.append(cal_tau)
     modes = ["dds", "cheap"] + [f"tau={t:g}" for t in taus]
     res = {m: [] for m in modes}   # rows: (idx, label, pred, radius, exp_frac, sec)
     for f in files:
@@ -59,6 +62,7 @@ def main(a):
     print("mode".ljust(14) + "".join(f"{'r=' + str(x):>8}" for x in RADII) + "     ACR  sec/img  speedup  exp_frac")
     t_dds = np.mean([row[5] for row in res["dds"]])
     base = {row[0]: row for row in res["dds"]}
+    summary = []
     for m in modes:
         rows = res[m]
         ok = lambda row, rad: row[2] == row[1] and row[3] >= rad
@@ -67,11 +71,21 @@ def main(a):
         sec = np.mean([row[5] for row in rows])
         print(m.ljust(14) + "".join(f"{x:8.1f}" for x in accs)
               + f"  {acr:6.3f}  {sec:7.2f}  {t_dds / sec:6.2f}x  {np.mean([row[4] for row in rows]):8.3f}")
-        if a.paired and m != "dds":   # images certified by dds at r but not by this mode, and vice versa
-            for rad in [0.25, 0.5, 0.75]:
-                lost = sum(ok(base[row[0]], rad) and not ok(row, rad) for row in rows)
-                won = sum(ok(row, rad) and not ok(base[row[0]], rad) for row in rows)
-                print(f"{'':14}  r={rad}: lost {lost}, gained {won} images vs dds")
+        paired = {}
+        for rad in [0.25, 0.5, 0.75]:   # images certified by dds at r but not by this mode, and vice versa
+            lost = sum(ok(base[row[0]], rad) and not ok(row, rad) for row in rows)
+            won = sum(ok(row, rad) and not ok(base[row[0]], rad) for row in rows)
+            pv = binomtest(lost, lost + won, 0.5).pvalue if lost + won else 1.0   # exact McNemar / sign test
+            paired[rad] = (lost, won, pv)
+            if a.paired and m != "dds":
+                print(f"{'':14}  r={rad}: lost {lost}, gained {won} images vs dds  (sign test p={pv:.3f})")
+        tau = float(m[4:]) if m.startswith("tau=") else (None if m == "dds" else -1.0)
+        summary.append(dict(mode=m, tau=tau, calibrated=int(tau is not None and tau == cal_tau),
+                            **{f"acc_r{rad}": x for rad, x in zip(RADII, accs)}, acr=acr, sec=sec,
+                            speedup=t_dds / sec, exp_frac=float(np.mean([row[4] for row in rows])),
+                            **{f"lost_r{r}": v[0] for r, v in paired.items()},
+                            **{f"gained_r{r}": v[1] for r, v in paired.items()},
+                            **{f"p_r{r}": v[2] for r, v in paired.items()}))
         if a.tsv_dir:
             os.makedirs(a.tsv_dir, exist_ok=True)
             with open(os.path.join(a.tsv_dir, f"{m.replace('=', '')}_{a.sigma:.2f}.tsv"), "w") as fo:
@@ -79,6 +93,13 @@ def main(a):
                 for row in rows:
                     print(f"{row[0]}\t{row[1]}\t{row[2]}\t{row[3]:.3}\t{int(row[2] == row[1])}\t{row[4]:.4f}\t"
                           f"0:00:{row[5]:09.6f}", file=fo)
+    if a.summary_csv:
+        import csv
+        os.makedirs(os.path.dirname(a.summary_csv) or ".", exist_ok=True)
+        with open(a.summary_csv, "w", newline="") as fo:
+            w = csv.DictWriter(fo, fieldnames=list(summary[0].keys()))
+            w.writeheader(); w.writerows(summary)
+        print(f"wrote {a.summary_csv}")
 
 
 if __name__ == "__main__":
@@ -91,4 +112,5 @@ if __name__ == "__main__":
     p.add_argument("--tau_file", type=str, default=None)
     p.add_argument("--paired", action="store_true", help="per-radius lost/gained images vs dds")
     p.add_argument("--tsv_dir", type=str, default=None, help="also write compare.py-style tsv files")
+    p.add_argument("--summary_csv", type=str, default=None, help="one row per mode, for plot_pareto.py")
     main(p.parse_args())
