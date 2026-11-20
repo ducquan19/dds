@@ -37,10 +37,14 @@ def main(a):
         # held-out TEST images disjoint from the certified ones (certify uses idx % skip == 0)
         ds = datasets.CIFAR10(a.data_dir, train=False, download=False, transform=transforms.ToTensor())
         pool = torch.tensor([i for i in range(len(ds)) if i % a.certify_skip != 0])
-    idx = pool[torch.randperm(len(pool))[: a.num_images]].tolist()
+    # dedicated generator: model construction (e.g. ViT init in full mode, absent in --reuse_exp mode)
+    # consumes the global RNG, which previously made the two modes pick different images
+    idx = pool[torch.randperm(len(pool), generator=torch.Generator().manual_seed(a.seed))[: a.num_images]].tolist()
     print(f"split={a.split}: {len(idx)} calibration images (pool {len(pool)})", flush=True)
 
     if prev is not None:
+        assert int(prev.get("idx_version", 1)) == 2, \
+            "reuse_exp: base probe was made by an older probe.py (different image sampling); delete it and rerun"
         assert int(prev["seed"]) == a.seed and int(prev["K"]) == a.K and float(prev["sigma"]) == a.sigma,             "reuse_exp: seed/K/sigma differ from the stored probe"
         assert np.array_equal(prev["img"][:: 1 + a.K], np.array(idx)), "reuse_exp: different calibration images"
     rec = {k: [] for k in ["img", "label", "conf", "cheap", "exp"]}
@@ -81,7 +85,7 @@ def main(a):
     out["first"][:: 1 + a.K] = True          # the i.i.d. sample of each image
     if prev is not None:
         out["exp"] = prev["exp"]
-    np.savez(a.out, sigma=a.sigma, seed=a.seed, K=a.K, **out)
+    np.savez(a.out, sigma=a.sigma, seed=a.seed, K=a.K, idx_version=2, **out)
 
     f = out["first"]
     print(f"saved {a.out}")
