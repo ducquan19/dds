@@ -34,7 +34,7 @@ def noise_for(idx, n, shape, sigma, seed):
 
 def main(a):
     model = CascadeRobustModel(a.sigma, mode="cheap" if a.only_cheap else "cascade", tau=1.01,
-                               cheap_ckpt=a.cheap_ckpt, amp=a.amp)
+                               cheap_ckpt=a.cheap_ckpt, amp=a.amp, cheap_norm=a.cheap_norm)
     ds = datasets.CIFAR10(a.data_dir, train=False, download=True, transform=transforms.ToTensor())
     todo = [i for i in range(len(ds)) if i % a.skip == 0][: a.max_images][a.shard:: a.num_shards]
     os.makedirs(a.out_dir, exist_ok=True)
@@ -81,6 +81,7 @@ if __name__ == "__main__":
     p.add_argument("--sigma", type=float, required=True)
     p.add_argument("--cheap_ckpt", type=str, required=True)
     p.add_argument("--only_cheap", action="store_true")
+    p.add_argument("--cheap_norm", choices=["auto", "normalize", "center"], default="auto")
     p.add_argument("--amp", action="store_true")
     p.add_argument("--skip", type=int, default=20)
     p.add_argument("--max_images", type=int, default=None)

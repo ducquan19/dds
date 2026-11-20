@@ -77,7 +77,26 @@ def _load(path):
         return torch.load(path, map_location="cpu")
 
 
-def load_cohen_resnet110(ckpt_path: str) -> nn.Module:
+class InputCenterLayer(nn.Module):
+    """SmoothAdv (Salman et al.) models trained from scratch subtract the mean only."""
+    def __init__(self, mean):
+        super().__init__()
+        self.mean = torch.tensor(mean).view(1, 3, 1, 1)
+
+    def forward(self, x):
+        return x - self.mean.to(x.device)
+
+
+def infer_norm(ckpt_path: str) -> str:
+    """Per the SmoothAdv README: under pretrained_models/cifar10/ only finetune_cifar_from_imagenet*
+    and self_training/ use NormalizeLayer; everything else uses InputCenterLayer. Cohen -> normalize."""
+    p = ckpt_path.replace("\\", "/")
+    if "pretrained_models/cifar10/" in p and not ("finetune_cifar_from_imagenet" in p or "self_training" in p):
+        return "center"
+    return "normalize"
+
+
+def load_cohen_resnet110(ckpt_path: str, norm: str = "auto") -> nn.Module:
     """Load a noise-trained CIFAR ResNet in Cohen's format: Sequential(normalize, resnet).
 
     Also accepts checkpoints from repos built on Cohen's code (SmoothAdv, Consistency, MACER, ...):
@@ -91,8 +110,10 @@ def load_cohen_resnet110(ckpt_path: str) -> nn.Module:
     if not any(k.startswith("1.") for k in state):
         state = {"1." + k: v for k, v in state.items()}
     state = {k: v for k, v in state.items() if not k.startswith("0.")}   # normalize layer has no params
-    model = nn.Sequential(NormalizeLayer(_CIFAR10_MEAN, _CIFAR10_STD),
-                          resnet_cifar(depth=depth, num_classes=10))
+    norm = infer_norm(ckpt_path) if norm == "auto" else norm
+    first = NormalizeLayer(_CIFAR10_MEAN, _CIFAR10_STD) if norm == "normalize" else InputCenterLayer(_CIFAR10_MEAN)
+    print(f"cheap model: resnet{depth}, norm={norm}, {ckpt_path}", flush=True)
+    model = nn.Sequential(first, resnet_cifar(depth=depth, num_classes=10))
     model.load_state_dict(state)
     return model
 
@@ -108,7 +129,8 @@ def sigma_to_timestep(diffusion, sigma: float) -> int:
 
 class CascadeRobustModel(nn.Module):
     def __init__(self, sigma: float, mode: str = "cascade", tau: float = 0.9,
-                 cheap_ckpt: str = None, multistep: bool = False, amp: bool = False):
+                 cheap_ckpt: str = None, multistep: bool = False, amp: bool = False,
+                 cheap_norm: str = "auto"):
         super().__init__()
         assert mode in ("dds", "cheap", "cascade")
         self.sigma, self.mode, self.tau, self.multistep = sigma, mode, tau, multistep
@@ -126,7 +148,7 @@ class CascadeRobustModel(nn.Module):
             self.classifier = AutoModelForImageClassification.from_pretrained(VIT_NAME).eval().cuda()
         if mode != "dds":
             assert cheap_ckpt is not None, "--cheap_ckpt is required for cheap/cascade"
-            self.cheap = load_cohen_resnet110(cheap_ckpt).eval().cuda()
+            self.cheap = load_cohen_resnet110(cheap_ckpt, cheap_norm).eval().cuda()
             if amp:
                 self.cheap = self.cheap.to(memory_format=torch.channels_last)
         torch.backends.cudnn.benchmark = True

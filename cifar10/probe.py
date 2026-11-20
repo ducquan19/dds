@@ -8,6 +8,10 @@ For each image: draw ONE noise sample (keeps samples i.i.d. across images for th
 statistical test in calibrate_tau.py) plus K extra samples for analysis.
 Saves cheap confidence / prediction, expensive (DDS) prediction and label.
 
+Noise is drawn per image from a CPU generator seeded by (seed, image idx), so the SAME noise can be
+regenerated. --reuse_exp <previous probe.npz> then skips the expensive path entirely and only runs
+the cheap model (seconds per candidate), reusing the stored DDS predictions.
+
 Example:
   python cifar10/probe.py --sigma 0.25 --cheap_ckpt models/cifar10/resnet110/noise_0.25/checkpoint.pth.tar \
       --num_images 5000 --K 4 --out probe_s0.25.npz
@@ -22,7 +26,9 @@ from DRM_cascade import CascadeRobustModel
 
 def main(a):
     torch.manual_seed(a.seed)
-    model = CascadeRobustModel(a.sigma, mode="cascade", tau=1.01, cheap_ckpt=a.cheap_ckpt, amp=a.amp)
+    prev = np.load(a.reuse_exp) if a.reuse_exp else None
+    model = CascadeRobustModel(a.sigma, mode="cheap" if prev is not None else "cascade", tau=1.01,
+                               cheap_ckpt=a.cheap_ckpt, amp=a.amp, cheap_norm=a.cheap_norm)
     if a.split == "train":
         # NOTE: both the Cohen ResNet and the ViT were trained on these images -> optimistic risk.
         ds = datasets.CIFAR10(a.data_dir, train=True, download=False, transform=transforms.ToTensor())
@@ -34,20 +40,29 @@ def main(a):
     idx = pool[torch.randperm(len(pool))[: a.num_images]].tolist()
     print(f"split={a.split}: {len(idx)} calibration images (pool {len(pool)})", flush=True)
 
+    if prev is not None:
+        assert int(prev["seed"]) == a.seed and int(prev["K"]) == a.K and float(prev["sigma"]) == a.sigma,             "reuse_exp: seed/K/sigma differ from the stored probe"
+        assert np.array_equal(prev["img"][:: 1 + a.K], np.array(idx)), "reuse_exp: different calibration images"
     rec = {k: [] for k in ["img", "label", "conf", "cheap", "exp"]}
     xs, ys, ids = [], [], []
 
     def flush():
-        x = torch.stack(xs).cuda().repeat_interleave(1 + a.K, 0)
-        x_noisy = x + torch.randn_like(x) * a.sigma
+        x = torch.stack(xs).repeat_interleave(1 + a.K, 0)
+        eps = torch.cat([torch.randn((1 + a.K,) + tuple(xs[0].shape),
+                                     generator=torch.Generator().manual_seed(a.seed * 1_000_003 + 7_919 + j))
+                         for j in ids])
+        x_noisy = (x + eps * a.sigma).cuda()
         probs = model.cheap_logits(x_noisy).softmax(1)
         conf, cheap = probs.max(1)
-        exp = torch.cat([model.expensive_logits(c).argmax(1) for c in x_noisy.split(a.batch_size)])
+        if prev is None:
+            exp = torch.cat([model.expensive_logits(c).argmax(1) for c in x_noisy.split(a.batch_size)]).cpu().numpy()
+        else:
+            exp = np.zeros(len(x_noisy), dtype=np.int64)   # filled from the stored probe below
         rec["img"].append(np.repeat(ids, 1 + a.K))
         rec["label"].append(np.repeat(ys, 1 + a.K))
         rec["conf"].append(conf.cpu().numpy())
         rec["cheap"].append(cheap.cpu().numpy())
-        rec["exp"].append(exp.cpu().numpy())
+        rec["exp"].append(exp)
         xs.clear(); ys.clear(); ids.clear()
 
     per_flush = max(1, a.batch_size // (1 + a.K))
@@ -64,7 +79,9 @@ def main(a):
     out = {k: np.concatenate(v) for k, v in rec.items()}
     out["first"] = np.zeros(len(out["img"]), dtype=bool)
     out["first"][:: 1 + a.K] = True          # the i.i.d. sample of each image
-    np.savez(a.out, sigma=a.sigma, **out)
+    if prev is not None:
+        out["exp"] = prev["exp"]
+    np.savez(a.out, sigma=a.sigma, seed=a.seed, K=a.K, **out)
 
     f = out["first"]
     print(f"saved {a.out}")
@@ -90,5 +107,7 @@ if __name__ == "__main__":
     p.add_argument("--data_dir", type=str, default="data/cifar10")
     p.add_argument("--seed", type=int, default=0)
     p.add_argument("--amp", action="store_true", help="fp16 autocast on the expensive path")
+    p.add_argument("--reuse_exp", type=str, default=None, help="previous probe .npz: reuse its DDS predictions")
+    p.add_argument("--cheap_norm", choices=["auto", "normalize", "center"], default="auto")
     p.add_argument("--out", type=str, required=True)
     main(p.parse_args())
