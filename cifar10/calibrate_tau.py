@@ -26,6 +26,11 @@ def main(a):
     d = np.load(a.probe)
     f = d["first"]                                 # one i.i.d. sample per image
     conf, cheap, exp = d["conf"][f], d["cheap"][f], d["exp"][f]
+    if a.half is not None:
+        # split the calibration images: half 0 for choosing among cheap models, half 1 for the
+        # final tau, so model selection does not invalidate the tau guarantee
+        sel = np.arange(len(conf)) % 2 == a.half
+        conf, cheap, exp = conf[sel], cheap[sel], exp[sel]
     n = len(conf)
     grid = np.round(np.arange(0.999, a.tau_min - 1e-9, -0.001), 3)
 
@@ -59,4 +64,6 @@ if __name__ == "__main__":
     p.add_argument("--alpha", type=float, default=0.05)
     p.add_argument("--tau_min", type=float, default=0.5)
     p.add_argument("--out", type=str, default=None, help="write chosen tau to this file")
+    p.add_argument("--half", type=int, choices=[0, 1], default=None,
+                   help="use only even (0) / odd (1) calibration images: 0 = model selection, 1 = final tau")
     main(p.parse_args())
